@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var engine = PrompterEngine()
     @State private var showImporter = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +22,22 @@ struct ContentView: View {
                 engine.load(url: url)
             case .failure(let error):
                 engine.report("File selection failed: \(error.localizedDescription)")
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "pdf" }) else {
+                engine.report("Drop a PDF file to load it.")
+                return false
+            }
+            engine.load(url: url)
+            return true
+        } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.yellow, lineWidth: 3)
+                    .padding(4)
+                    .allowsHitTesting(false)
             }
         }
     }

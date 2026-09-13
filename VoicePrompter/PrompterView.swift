@@ -42,7 +42,7 @@ struct PrompterView: View {
         }
         .overlay(alignment: .center) {
             if engine.wordCount == 0 {
-                Text(engine.statusMessage ?? "Open a PDF to begin")
+                Text(engine.statusMessage ?? "Open or drop a PDF to begin")
                     .font(.title3)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.5))
