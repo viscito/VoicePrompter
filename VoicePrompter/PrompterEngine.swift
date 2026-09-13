@@ -5,7 +5,8 @@ import Combine
 /// word index). Speed, rewind, seek and scrubbing are all just changes to it.
 @MainActor
 final class PrompterEngine: ObservableObject {
-    @Published var script = Script()
+    @Published private(set) var script = Script()
+    @Published private(set) var scriptRevision = 0   // bumps whenever `script` changes
     @Published var isPlaying = false
     @Published var wpm: Double = 130                    // reading pace
     @Published var fontSize: Double = 34
@@ -59,21 +60,26 @@ final class PrompterEngine: ObservableObject {
 
     // MARK: Loading
 
+    private func setScript(_ s: Script) {
+        script = s
+        scriptRevision += 1
+    }
+
     func load(url: URL) {
         pause()
         position = 0
         ocrTask?.cancel()
         switch Script.load(from: url) {
         case .success(let s):
-            script = s
+            setScript(s)
             statusMessage = nil
             saveBookmark(for: url)
             savePosition()          // pair a fresh position (0) with the new file
         case .emptyText:
-            script = Script()
+            setScript(Script())
             beginOCR(url: url)      // no selectable text — try recognizing it
         case .unreadable:
-            script = Script()
+            setScript(Script())
             statusMessage = "Couldn’t open “\(url.lastPathComponent)” as a PDF."
         }
     }
@@ -102,7 +108,7 @@ final class PrompterEngine: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             switch result {
             case .success(let s):
-                self.script = s
+                self.setScript(s)
                 self.statusMessage = nil
                 self.saveBookmark(for: url)
                 self.savePosition()

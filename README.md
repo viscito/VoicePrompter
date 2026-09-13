@@ -64,8 +64,8 @@ VoicePrompter/
   ContentView.swift        Window layout + transport controls
   PrompterView.swift       Scrolling surface, highlight, word-precise offset
   PrompterEngine.swift     Playback clock, speed, rewind, seek, scrub
-  ScriptImporter.swift     PDF → paragraphs/words (PDFKit)
-  FlowLayout.swift          Line-wrapping layout for word views
+  ScriptImporter.swift     PDF → paragraphs/words (PDFKit) + Vision OCR fallback
+  ScriptLayout.swift       Precomputed word rectangles (TextKit) for windowing
   ScrubberBar.swift        Draggable progress bar
 ```
 
@@ -80,7 +80,6 @@ falls out of one number.
 
 ## Roadmap ideas
 
-- Windowed rendering of the word views for very long scripts (whole books).
 - Optional recording of the take alongside the prompt.
 - App Store readiness (App Sandbox + entitlement, app icon) and a notarized
   release build.

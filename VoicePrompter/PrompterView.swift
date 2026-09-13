@@ -1,34 +1,43 @@
 import SwiftUI
 
-/// Collects each word's vertical midpoint within the content coordinate space.
-/// Because it's measured in the content's own space, values are stable as the
-/// content scrolls and only recompute when layout actually changes.
-struct WordFramesKey: PreferenceKey {
-    static var defaultValue: [Int: CGFloat] = [:]
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, n in n })
-    }
-}
-
-/// The scrolling prompter surface. Words flow like text, the current word is
-/// highlighted karaoke-style, and the content is offset so that word sits on a
-/// fixed read line — interpolating between words for smooth, continuous motion.
+/// The scrolling prompter surface. Words are positioned from a precomputed
+/// `ScriptLayout`, and only those in (or near) the viewport are rendered, so it
+/// scales to very long scripts. The current word is highlighted karaoke-style
+/// and parked on a fixed read line, gliding via interpolation between words.
 struct PrompterView: View {
     @ObservedObject var engine: PrompterEngine
-    @State private var wordMidY: [Int: CGFloat] = [:]
+    @State private var layout: ScriptLayout?
 
     private let readLineFraction: CGFloat = 0.4     // where the "live" word sits
+    private let columnMaxWidth: CGFloat = 820
+    private let hPadding: CGFloat = 40
+
+    private struct LayoutKey: Hashable { let rev: Int; let width: Int; let font: Int }
 
     var body: some View {
         GeometryReader { geo in
             let readLineY = geo.size.height * readLineFraction
+            let colWidth = max(0, min(geo.size.width - hPadding * 2, columnMaxWidth))
 
-            content(readLineY: readLineY)
-                .frame(maxWidth: 900)
-                .frame(maxWidth: .infinity)
-                .coordinateSpace(name: "content")
-                .offset(y: readLineY - targetY())
-                .onPreferenceChange(WordFramesKey.self) { wordMidY = $0 }
+            Group {
+                if let layout, engine.wordCount > 0, !layout.boxes.isEmpty {
+                    prompter(layout: layout, colWidth: colWidth,
+                             readLineY: readLineY, viewport: geo.size.height)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task(id: LayoutKey(rev: engine.scriptRevision,
+                                width: Int(colWidth), font: Int(engine.fontSize))) {
+                guard colWidth > 0, engine.wordCount > 0 else { layout = nil; return }
+                let script = engine.script
+                let width = colWidth
+                let fontSize = CGFloat(engine.fontSize)
+                let computed = await Task.detached(priority: .userInitiated) {
+                    ScriptLayout.make(script: script, width: width, fontSize: fontSize)
+                }.value
+                if Task.isCancelled { return }
+                layout = computed
+            }
         }
         .clipped()
         .background(.black)
@@ -52,47 +61,47 @@ struct PrompterView: View {
         }
     }
 
-    private func content(readLineY: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 26) {
-            Color.clear.frame(height: readLineY)                 // lead-in
-            ForEach(engine.script.paragraphs) { para in
-                FlowLayout {
-                    ForEach(para.wordRange, id: \.self) { i in
-                        wordView(engine.script.words[i])
-                    }
-                }
+    private func prompter(layout: ScriptLayout, colWidth: CGFloat,
+                          readLineY: CGFloat, viewport: CGFloat) -> some View {
+        let target = targetY(layout)
+        let offset = readLineY - target
+
+        // Visible content-Y range, with one viewport of buffer above and below.
+        let visibleTop = target - readLineY
+        let lower = layout.firstID(bottomAtLeast: visibleTop - viewport)
+        let upper = layout.lastID(topAtMost: visibleTop + viewport * 2)
+        let ids = (lower <= upper && lower >= 0) ? Array(lower...upper) : []
+
+        return ZStack(alignment: .topLeading) {
+            ForEach(ids, id: \.self) { id in
+                let box = layout.boxes[id]
+                Text(engine.script.words[id].text)
+                    .font(.system(size: engine.fontSize, weight: .medium))
+                    .foregroundStyle(color(for: id))
+                    .position(x: box.midX, y: box.midY)
+                    .onTapGesture { engine.seek(toWord: id) }
             }
-            Color.clear.frame(height: readLineY * 1.5)           // run-out
         }
-        .padding(.horizontal, 40)
+        .frame(width: colWidth, height: layout.totalHeight, alignment: .topLeading)
+        .offset(y: offset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func wordView(_ word: Word) -> some View {
+    private func color(for id: Int) -> Color {
         let idx = engine.currentWordIndex
-        let color: Color = word.id == idx ? .yellow
-                         : word.id  < idx ? .white
-                                          : .white.opacity(0.45)
-        return Text(word.text)
-            .font(.system(size: engine.fontSize,
-                          weight: word.id == idx ? .bold : .medium))
-            .foregroundStyle(color)
-            .background(GeometryReader { g in
-                Color.clear.preference(key: WordFramesKey.self,
-                    value: [word.id: g.frame(in: .named("content")).midY])
-            })
-            .onTapGesture { engine.seek(toWord: word.id) }        // click-to-seek
+        if id == idx { return .yellow }
+        return id < idx ? .white : .white.opacity(0.45)
     }
 
-    /// Interpolate the target Y between the current word and the next so the
-    /// prompter glides rather than hopping paragraph-to-paragraph.
-    private func targetY() -> CGFloat {
-        guard engine.wordCount > 0 else { return 0 }
+    /// Interpolate the read-line target between the current and next word.
+    private func targetY(_ layout: ScriptLayout) -> CGFloat {
         let p = engine.position
         let lo = min(Int(p), engine.wordCount - 1)
         let hi = min(lo + 1, engine.wordCount - 1)
+        guard lo >= 0, hi < layout.boxes.count else { return 0 }
         let f = CGFloat(p - Double(lo))
-        let y0 = wordMidY[lo] ?? 0
-        let y1 = wordMidY[hi] ?? y0
+        let y0 = layout.boxes[lo].midY
+        let y1 = layout.boxes[hi].midY
         return y0 + (y1 - y0) * f
     }
 }
