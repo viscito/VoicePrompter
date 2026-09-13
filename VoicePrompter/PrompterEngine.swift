@@ -24,6 +24,7 @@ final class PrompterEngine: ObservableObject {
         static let wpm = "wpm"
         static let fontSize = "fontSize"
         static let bookmark = "lastPDFBookmark"
+        static let position = "lastPosition"
     }
 
     init() {
@@ -38,6 +39,11 @@ final class PrompterEngine: ObservableObject {
         $wpm.sink { [weak self] in self?.defaults.set($0, forKey: Keys.wpm) }
             .store(in: &cancellables)
         $fontSize.sink { [weak self] in self?.defaults.set($0, forKey: Keys.fontSize) }
+            .store(in: &cancellables)
+        // Persist playback position, throttled so 60fps updates don't thrash disk.
+        $position
+            .throttle(for: .seconds(2), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] _ in self?.savePosition() }
             .store(in: &cancellables)
         // Re-open the last file, if any.
         restoreLastFile()
@@ -60,6 +66,7 @@ final class PrompterEngine: ObservableObject {
             script = s
             statusMessage = nil
             saveBookmark(for: url)
+            savePosition()          // pair a fresh position (0) with the new file
         case .emptyText:
             script = Script()
             statusMessage = """
@@ -76,7 +83,17 @@ final class PrompterEngine: ObservableObject {
         statusMessage = message
     }
 
+    /// Save the current playback position now (e.g. before the app backgrounds).
+    func persist() {
+        savePosition()
+    }
+
     // MARK: Persistence
+
+    private func savePosition() {
+        guard wordCount > 0 else { return }   // don't clobber a saved value before a file loads
+        defaults.set(position, forKey: Keys.position)
+    }
 
     /// Store a security-scoped bookmark to the current file so it survives
     /// relaunch (and keeps working once the app is sandboxed).
@@ -94,16 +111,22 @@ final class PrompterEngine: ObservableObject {
     /// bookmark; a missing/moved file clears it so we don't retry forever.
     private func restoreLastFile() {
         guard let data = defaults.data(forKey: Keys.bookmark) else { return }
+        let savedPosition = defaults.double(forKey: Keys.position)  // read before load() resets it
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data,
                                  options: .withSecurityScope,
                                  relativeTo: nil,
                                  bookmarkDataIsStale: &stale) else {
             defaults.removeObject(forKey: Keys.bookmark)
+            defaults.removeObject(forKey: Keys.position)
             return
         }
-        if stale { /* load()'s success path re-saves a fresh bookmark */ }
-        load(url: url)
+        _ = stale                       // load()'s success path re-saves a fresh bookmark
+        load(url: url)                  // resets position to 0
+        if wordCount > 0 {              // then jump back to where we left off
+            position = min(max(0, savedPosition), Double(wordCount - 1))
+            savePosition()
+        }
     }
 
     // MARK: Transport
@@ -117,7 +140,7 @@ final class PrompterEngine: ObservableObject {
             .sink { [weak self] _ in self?.tick() }
     }
 
-    func pause()   { isPlaying = false; timer?.cancel(); timer = nil; lastTick = nil }
+    func pause()   { isPlaying = false; timer?.cancel(); timer = nil; lastTick = nil; savePosition() }
     func toggle()  { isPlaying ? pause() : play() }
     func restart() { position = 0 }
 
@@ -146,6 +169,7 @@ final class PrompterEngine: ObservableObject {
         isScrubbing = false
         if resumeAfterScrub { play() }
         resumeAfterScrub = false
+        savePosition()
     }
 
     // MARK: Clock

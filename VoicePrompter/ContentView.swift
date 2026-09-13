@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var engine = PrompterEngine()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showImporter = false
     @State private var isDropTargeted = false
 
@@ -39,6 +40,9 @@ struct ContentView: View {
                     .padding(4)
                     .allowsHitTesting(false)
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { engine.persist() }
         }
     }
 
