@@ -18,6 +18,31 @@ final class PrompterEngine: ObservableObject {
     private var lastTick: Date?
     private var timer: AnyCancellable?
 
+    private let defaults = UserDefaults.standard
+    private var cancellables = Set<AnyCancellable>()
+    private enum Keys {
+        static let wpm = "wpm"
+        static let fontSize = "fontSize"
+        static let bookmark = "lastPDFBookmark"
+    }
+
+    init() {
+        // Restore saved preferences (clamped to valid ranges).
+        if defaults.object(forKey: Keys.wpm) != nil {
+            wpm = min(max(defaults.double(forKey: Keys.wpm), 60), 300)
+        }
+        if defaults.object(forKey: Keys.fontSize) != nil {
+            fontSize = min(max(defaults.double(forKey: Keys.fontSize), 18), 80)
+        }
+        // Persist future changes.
+        $wpm.sink { [weak self] in self?.defaults.set($0, forKey: Keys.wpm) }
+            .store(in: &cancellables)
+        $fontSize.sink { [weak self] in self?.defaults.set($0, forKey: Keys.fontSize) }
+            .store(in: &cancellables)
+        // Re-open the last file, if any.
+        restoreLastFile()
+    }
+
     var wordCount: Int { script.words.count }
     var currentWordIndex: Int { min(Int(position), max(0, wordCount - 1)) }
 
@@ -34,6 +59,7 @@ final class PrompterEngine: ObservableObject {
         case .success(let s):
             script = s
             statusMessage = nil
+            saveBookmark(for: url)
         case .emptyText:
             script = Script()
             statusMessage = """
@@ -48,6 +74,36 @@ final class PrompterEngine: ObservableObject {
 
     func report(_ message: String) {
         statusMessage = message
+    }
+
+    // MARK: Persistence
+
+    /// Store a security-scoped bookmark to the current file so it survives
+    /// relaunch (and keeps working once the app is sandboxed).
+    private func saveBookmark(for url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        if let data = try? url.bookmarkData(options: .withSecurityScope,
+                                            includingResourceValuesForKeys: nil,
+                                            relativeTo: nil) {
+            defaults.set(data, forKey: Keys.bookmark)
+        }
+    }
+
+    /// Re-open the last file on launch. A successful load refreshes the
+    /// bookmark; a missing/moved file clears it so we don't retry forever.
+    private func restoreLastFile() {
+        guard let data = defaults.data(forKey: Keys.bookmark) else { return }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data,
+                                 options: .withSecurityScope,
+                                 relativeTo: nil,
+                                 bookmarkDataIsStale: &stale) else {
+            defaults.removeObject(forKey: Keys.bookmark)
+            return
+        }
+        if stale { /* load()'s success path re-saves a fresh bookmark */ }
+        load(url: url)
     }
 
     // MARK: Transport
