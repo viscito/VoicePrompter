@@ -16,7 +16,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 760, minHeight: 540)
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.pdf]) { result in
-            if case .success(let url) = result { engine.load(url: url) }
+            switch result {
+            case .success(let url):
+                engine.load(url: url)
+            case .failure(let error):
+                engine.report("File selection failed: \(error.localizedDescription)")
+            }
         }
     }
 

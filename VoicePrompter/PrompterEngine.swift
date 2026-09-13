@@ -10,6 +10,7 @@ final class PrompterEngine: ObservableObject {
     @Published var wpm: Double = 130                    // reading pace
     @Published var fontSize: Double = 34
     @Published var position: Double = 0                 // fractional word index
+    @Published var statusMessage: String?               // shown when nothing is loaded
 
     @Published private(set) var isScrubbing = false
     private var resumeAfterScrub = false
@@ -28,8 +29,25 @@ final class PrompterEngine: ObservableObject {
 
     func load(url: URL) {
         pause()
-        if let s = Script.load(from: url) { script = s }
         position = 0
+        switch Script.load(from: url) {
+        case .success(let s):
+            script = s
+            statusMessage = nil
+        case .emptyText:
+            script = Script()
+            statusMessage = """
+            “\(url.lastPathComponent)” has no selectable text — it looks like a \
+            scanned or image-only PDF. It needs OCR before it can be read as a script.
+            """
+        case .unreadable:
+            script = Script()
+            statusMessage = "Couldn’t open “\(url.lastPathComponent)” as a PDF."
+        }
+    }
+
+    func report(_ message: String) {
+        statusMessage = message
     }
 
     // MARK: Transport

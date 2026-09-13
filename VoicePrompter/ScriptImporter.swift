@@ -1,5 +1,12 @@
 import PDFKit
 
+/// Outcome of trying to import a PDF, so the UI can explain failures.
+enum ScriptLoadResult {
+    case success(Script)
+    case emptyText      // opened, but no selectable text (likely a scanned/image PDF)
+    case unreadable     // couldn't be opened as a PDF at all
+}
+
 /// One tokenized word from the script, with a stable global index.
 struct Word: Identifiable {
     let id: Int          // global index into Script.words
@@ -19,18 +26,20 @@ struct Script {
     var words: [Word] = []
     var paragraphs: [Paragraph] = []
 
-    /// Load and tokenize a PDF's text. Returns nil if the file can't be opened.
-    static func load(from url: URL) -> Script? {
+    /// Load and tokenize a PDF's text, reporting why it failed if it did.
+    static func load(from url: URL) -> ScriptLoadResult {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let doc = PDFDocument(url: url) else { return nil }
+        guard let doc = PDFDocument(url: url) else { return .unreadable }
 
         var raw = ""
         for i in 0..<doc.pageCount {
             if let s = doc.page(at: i)?.string { raw += s + "\n\n" }
         }
-        return parse(raw)
+
+        let script = parse(raw)
+        return script.words.isEmpty ? .emptyText : .success(script)
     }
 
     /// Split raw text into paragraphs (on blank lines) and words (on whitespace).
