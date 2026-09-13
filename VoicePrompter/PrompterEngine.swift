@@ -17,6 +17,7 @@ final class PrompterEngine: ObservableObject {
 
     private var lastTick: Date?
     private var timer: AnyCancellable?
+    private var ocrTask: Task<Void, Never>?
 
     private let defaults = UserDefaults.standard
     private var cancellables = Set<AnyCancellable>()
@@ -61,6 +62,7 @@ final class PrompterEngine: ObservableObject {
     func load(url: URL) {
         pause()
         position = 0
+        ocrTask?.cancel()
         switch Script.load(from: url) {
         case .success(let s):
             script = s
@@ -69,13 +71,46 @@ final class PrompterEngine: ObservableObject {
             savePosition()          // pair a fresh position (0) with the new file
         case .emptyText:
             script = Script()
-            statusMessage = """
-            “\(url.lastPathComponent)” has no selectable text — it looks like a \
-            scanned or image-only PDF. It needs OCR before it can be read as a script.
-            """
+            beginOCR(url: url)      // no selectable text — try recognizing it
         case .unreadable:
             script = Script()
             statusMessage = "Couldn’t open “\(url.lastPathComponent)” as a PDF."
+        }
+    }
+
+    /// Fall back to Vision OCR for image-only PDFs, off the main thread,
+    /// reporting per-page progress and applying the result on completion.
+    private func beginOCR(url: URL) {
+        statusMessage = "No selectable text — recognizing…"
+        let (progress, continuation) = AsyncStream<(Int, Int)>.makeStream()
+
+        ocrTask = Task { [weak self] in
+            let work = Task.detached(priority: .userInitiated) { () -> ScriptLoadResult in
+                let result = Script.ocr(url: url) { done, total in
+                    continuation.yield((done, total))
+                }
+                continuation.finish()
+                return result
+            }
+
+            for await (done, total) in progress {
+                if Task.isCancelled { break }
+                self?.statusMessage = "Recognizing text… page \(done) of \(total)"
+            }
+
+            let result = await work.value
+            guard let self, !Task.isCancelled else { return }
+            switch result {
+            case .success(let s):
+                self.script = s
+                self.statusMessage = nil
+                self.saveBookmark(for: url)
+                self.savePosition()
+            case .emptyText:
+                self.statusMessage = "OCR found no readable text in “\(url.lastPathComponent)”."
+            case .unreadable:
+                self.statusMessage = "Couldn’t open “\(url.lastPathComponent)” as a PDF."
+            }
         }
     }
 

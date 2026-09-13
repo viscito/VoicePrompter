@@ -22,8 +22,10 @@ Designed to run on the Mac's own screen (no beam-splitter mirroring).
   auto-pauses while dragging and resumes on release.
 - **Adjustable font size.**
 - **Drag-and-drop** — drop a PDF anywhere on the window to load it.
-- **Remembers your session** — reopens your last PDF and restores speed and
-  font size on launch (via a security-scoped bookmark).
+- **Remembers your session** — reopens your last PDF and restores speed,
+  font size, and playback position on launch (via a security-scoped bookmark).
+- **OCR fallback** — scanned/image-only PDFs are recognized on-device with the
+  Vision framework (no network), with per-page progress.
 
 ## Requirements
 
@@ -79,7 +81,6 @@ falls out of one number.
 ## Roadmap ideas
 
 - Windowed rendering of the word views for very long scripts (whole books).
-- Vision OCR fallback for image-only (scanned) PDFs.
 - Optional recording of the take alongside the prompt.
 - App Store readiness (App Sandbox + entitlement, app icon) and a notarized
   release build.

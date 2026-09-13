@@ -1,4 +1,6 @@
 import PDFKit
+import Vision
+import CoreGraphics
 
 /// Outcome of trying to import a PDF, so the UI can explain failures.
 enum ScriptLoadResult {
@@ -65,5 +67,62 @@ struct Script {
                 Paragraph(id: pIndex, text: text, wordRange: start..<wordCounter))
         }
         return script
+    }
+
+    // MARK: OCR fallback (for scanned / image-only PDFs)
+
+    /// Render each page and recognize its text with Vision. CPU-heavy and
+    /// synchronous — call from a background task. `progress` reports (page, total).
+    static func ocr(url: URL, progress: @Sendable (Int, Int) -> Void) -> ScriptLoadResult {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let doc = PDFDocument(url: url) else { return .unreadable }
+
+        let count = doc.pageCount
+        var raw = ""
+        for i in 0..<count {
+            if Task.isCancelled { break }
+            progress(i + 1, count)
+            guard let page = doc.page(at: i), let image = render(page: page, scale: 2.5) else { continue }
+            raw += recognizeLines(in: image).joined(separator: "\n") + "\n\n"
+        }
+
+        let script = parse(raw)
+        return script.words.isEmpty ? .emptyText : .success(script)
+    }
+
+    /// Rasterize a PDF page to a bitmap suitable for OCR.
+    private static func render(page: PDFPage, scale: CGFloat) -> CGImage? {
+        let bounds = page.bounds(for: .mediaBox)
+        let width = Int((bounds.width * scale).rounded())
+        let height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0,
+              let ctx = CGContext(data: nil, width: width, height: height,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return nil }
+
+        ctx.setFillColor(gray: 1, alpha: 1)                      // white background
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: -bounds.origin.x, y: -bounds.origin.y)
+        page.draw(with: .mediaBox, to: ctx)
+        return ctx.makeImage()
+    }
+
+    /// Recognize text lines in reading order (top to bottom).
+    private static func recognizeLines(in cgImage: CGImage) -> [String] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do { try handler.perform([request]) } catch { return [] }
+
+        let observations = (request.results ?? [])
+            .sorted { $0.boundingBox.origin.y > $1.boundingBox.origin.y }   // Vision y-origin is bottom-left
+        return observations.compactMap { $0.topCandidates(1).first?.string }
     }
 }
